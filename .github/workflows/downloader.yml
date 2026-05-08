@@ -1,20 +1,20 @@
-name: SmartDownloader - PyTorch Ultra v6.1 ZIP-Push
+name: SmartDownloader - PyTorch Ultra v8.0 (Windows WHL + Split ZIP)
 
 on:
   workflow_dispatch:
     inputs:
       python_ver:
-        description: 'Python Version (e.g. 3.10 or 3.11)'
+        description: 'Python version (3.10 / 3.11)'
         required: true
         default: '3.11'
 
       cuda_ver:
-        description: 'CUDA Version (e.g. cu121 or cu118 or cpu)'
+        description: 'CUDA Version (cu121 / cu118 / cpu)'
         required: true
         default: 'cu121'
 
       torch_ver:
-        description: 'Torch Version'
+        description: 'Torch version'
         required: true
         default: '2.2.2'
 
@@ -26,51 +26,93 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 🧠 Checkout
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: 🐍 Setup Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ github.event.inputs.python_ver }}
+          python-version: 3.11
 
-      - name: 📥 Download PyTorch Wheels
+      - name: Download Windows PyTorch Wheels (Only Torch/TV/TA)
         run: |
           set -e
           mkdir -p downloads
 
+          PY="${{ github.event.inputs.python_ver }}"
           CUDA="${{ github.event.inputs.cuda_ver }}"
           TORCH="${{ github.event.inputs.torch_ver }}"
 
-          echo "🔥 Downloading torch ecosystem..."
-          pip download torch=="$TORCH" torchvision torchaudio \
-            --index-url https://download.pytorch.org/whl/$CUDA \
+          PY_MAJOR=$(echo $PY | cut -d '.' -f1)
+          PY_MINOR=$(echo $PY | cut -d '.' -f2)
+          PYTAG="${PY_MAJOR}${PY_MINOR}"
+
+          # Torch wheels
+          pip download torch=="$TORCH" \
+            --platform win_amd64 \
+            --python-version "$PYTAG" \
+            --implementation cp \
+            --abi cp"$PYTAG" \
+            --only-binary=:all: \
+            --index-url "https://download.pytorch.org/whl/$CUDA" \
             -d downloads/
 
-          echo "📦 Downloaded files:"
+          # TorchVision
+          pip download torchvision \
+            --platform win_amd64 \
+            --python-version "$PYTAG" \
+            --implementation cp \
+            --abi cp"$PYTAG" \
+            --only-binary=:all: \
+            --index-url "https://download.pytorch.org/whl/$CUDA" \
+            -d downloads/
+
+          # TorchAudio
+          pip download torchaudio \
+            --platform win_amd64 \
+            --python-version "$PYTAG" \
+            --implementation cp \
+            --abi cp"$PYTAG" \
+            --only-binary=:all: \
+            --index-url "https://download.pytorch.org/whl/$CUDA" \
+            -d downloads/
+
+          echo "Downloaded WHL files:"
           ls -lh downloads
 
-      - name: 📦 Create ZIP Archive (Safe Push)
+      - name: Create ZIP + Auto Split
         run: |
           set -e
           TS=$(date +%s)
-          ZIP_NAME="pytorch_${{ github.event.inputs.torch_ver }}_${TS}.zip"
+          ZIP="pytorch_win_${TS}.zip"
 
           cd downloads
-          zip -r "../$ZIP_NAME" .
+          zip -r "../$ZIP" .
           cd ..
+          rm -rf downloads
 
-          echo "Created ZIP: $ZIP_NAME"
-          ls -lh "$ZIP_NAME"
+          echo "Main ZIP:"
+          ls -lh "$ZIP"
 
-          rm -rf downloads  # Remove unzipped files to avoid huge push
+          # Split if > 90MB
+          MAX_SIZE=$((90 * 1024 * 1024))
+          FILE_SIZE=$(stat -c%s "$ZIP")
 
-      - name: 🧩 Commit & Push ZIP Only
+          if [ "$FILE_SIZE" -gt "$MAX_SIZE" ]; then
+            echo "ZIP > 90MB → Splitting to 50MB chunks"
+            split -b 50m "$ZIP" "${ZIP}.part_"
+            rm "$ZIP"
+          fi
+
+          echo "Final files:"
+          ls -lh
+
+      - name: Commit & Push ZIPs
         run: |
           set -e
           git config --global user.email "actions@github.com"
           git config --global user.name "github-actions[bot]"
 
-          git add "*.zip"
-          git commit -m "🔥 PyTorch Ultra v6.1 ZIP package uploaded"
+          git add "*.zip" "*.part_*" 2>/dev/null || true
+          git commit -m "Ultra v8.0 Windows PyTorch WHL Package"
           git push
