@@ -32,7 +32,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: 3.11
+          python-version: "3.11"
 
       - name: Prepare variables
         id: vars
@@ -56,8 +56,8 @@ jobs:
           set -euo pipefail
           mkdir -p wheels
 
-          pip download torch=="${{ steps.vars.outputs.TORCH }}" \
-            --index-url "https://download.pytorch.org/whl/${{ steps.vars.outputs.CUDA }}" \
+          pip download "torch==${{ github.event.inputs.torch_ver }}" \
+            --index-url "https://download.pytorch.org/whl/${{ github.event.inputs.cuda_ver }}" \
             --platform win_amd64 \
             --python-version "${{ steps.vars.outputs.PYTAG }}" \
             --implementation cp \
@@ -66,8 +66,8 @@ jobs:
             --no-deps \
             -d wheels
 
-          pip download torchvision \
-            --index-url "https://download.pytorch.org/whl/${{ steps.vars.outputs.CUDA }}" \
+          pip download "torchvision" \
+            --index-url "https://download.pytorch.org/whl/${{ github.event.inputs.cuda_ver }}" \
             --platform win_amd64 \
             --python-version "${{ steps.vars.outputs.PYTAG }}" \
             --implementation cp \
@@ -76,8 +76,8 @@ jobs:
             --no-deps \
             -d wheels
 
-          pip download torchaudio \
-            --index-url "https://download.pytorch.org/whl/${{ steps.vars.outputs.CUDA }}" \
+          pip download "torchaudio" \
+            --index-url "https://download.pytorch.org/whl/${{ github.event.inputs.cuda_ver }}" \
             --platform win_amd64 \
             --python-version "${{ steps.vars.outputs.PYTAG }}" \
             --implementation cp \
@@ -96,36 +96,33 @@ jobs:
           OUTDIR="${{ steps.vars.outputs.OUTDIR }}"
           mkdir -p "$OUTDIR"
 
-          echo "[" > "$OUTDIR/metadata.json"
-          first=true
+          python - <<'PY'
+          import json, hashlib, os, pathlib, shutil, zipfile
 
-          for f in wheels/*.whl; do
-            name="$(basename "$f")"
-            sha="$(sha256sum "$f" | awk '{print $1}')"
-            size="$(stat -c%s "$f")"
+          outdir = pathlib.Path("${{ steps.vars.outputs.OUTDIR }}")
+          wheels = pathlib.Path("wheels")
+          outdir.mkdir(parents=True, exist_ok=True)
 
-            if [ "$first" = true ]; then
-              first=false
-            else
-              echo "," >> "$OUTDIR/metadata.json"
-            fi
+          meta = []
+          for f in wheels.glob("*.whl"):
+              data = f.read_bytes()
+              sha = hashlib.sha256(data).hexdigest()
+              size = f.stat().st_size
+              meta.append({
+                  "file": f.name,
+                  "sha256": sha,
+                  "size": size
+              })
+              shutil.copy2(f, outdir / f.name)
 
-            cat >> "$OUTDIR/metadata.json" <<EOF
-  {
-    "file": "$name",
-    "sha256": "$sha",
-    "size": $size
-  }
-EOF
-            cp "$f" "$OUTDIR/"
-          done
+          (outdir / "metadata.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
-          echo "]" >> "$OUTDIR/metadata.json"
-
-          (
-            cd "$OUTDIR"
-            zip -r package.zip ./*.whl metadata.json
-          )
+          zip_path = outdir / "package.zip"
+          with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+              for f in outdir.iterdir():
+                  if f.name != "package.zip":
+                      zf.write(f, arcname=f.name)
+          PY
 
       - name: Update index.json
         shell: bash
@@ -137,16 +134,16 @@ EOF
           REL_PATH="${OUTDIR#dist/}"
 
           cat > dist/index.json <<EOF
-{
-  "latest": "$REL_PATH",
-  "path": "$OUTDIR",
-  "torch_version": "${{ steps.vars.outputs.TORCH }}",
-  "cuda": "${{ steps.vars.outputs.CUDA }}",
-  "python_tag": "cp${{ steps.vars.outputs.PYTAG }}",
-  "platform": "win_amd64",
-  "files_page": "https://github.com/${{ github.repository }}/tree/${{ github.ref_name }}/$OUTDIR"
-}
-EOF
+          {
+            "latest": "$REL_PATH",
+            "path": "$OUTDIR",
+            "torch_version": "${{ steps.vars.outputs.TORCH }}",
+            "cuda": "${{ steps.vars.outputs.CUDA }}",
+            "python_tag": "cp${{ steps.vars.outputs.PYTAG }}",
+            "platform": "win_amd64",
+            "files_page": "https://github.com/${{ github.repository }}/tree/${{ github.ref_name }}/$OUTDIR"
+          }
+          EOF
 
       - name: Commit and push dist
         shell: bash
@@ -169,10 +166,10 @@ EOF
         run: |
           OUTDIR="${{ steps.vars.outputs.OUTDIR }}"
           cat <<EOF
-{
-  "status": "ok",
-  "repo_tree_url": "https://github.com/${{ github.repository }}/tree/${{ github.ref_name }}/$OUTDIR",
-  "metadata_page_url": "https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/$OUTDIR/metadata.json",
-  "zip_page_url": "https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/$OUTDIR/package.zip"
-}
-EOF
+          {
+            "status": "ok",
+            "repo_tree_url": "https://github.com/${{ github.repository }}/tree/${{ github.ref_name }}/$OUTDIR",
+            "metadata_page_url": "https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/$OUTDIR/metadata.json",
+            "zip_page_url": "https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/$OUTDIR/package.zip"
+          }
+          EOF
