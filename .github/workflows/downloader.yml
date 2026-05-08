@@ -1,4 +1,4 @@
-name: PyTorch Ultra v12.0 (No Releases, Repo Artifact Commit)
+name: PyTorch Ultra v12.0
 
 on:
   workflow_dispatch:
