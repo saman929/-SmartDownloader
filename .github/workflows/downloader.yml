@@ -146,30 +146,29 @@ jobs:
           EOF
 
       - name: Commit and push dist
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+  shell: bash
+  run: |
+    set -euo pipefail
 
-          git add dist
-          if git diff --cached --quiet; then
-            echo "No changes to commit."
-            exit 0
-          fi
+    git config user.name "github-actions[bot]"
+    git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git commit -m "Add PyTorch wheels: ${{ steps.vars.outputs.TORCH }} / ${{ steps.vars.outputs.CUDA }} / cp${{ steps.vars.outputs.PYTAG }}"
-          git push
+    # Prevent RPC errors on large commits
+    git config http.postBuffer 157286400
+    git config http.maxRequestBuffer 157286400
+    git config core.compression 0
+    git config pack.window 0
+    git config pack.threads 1
+    git config pack.windowMemory "1m"
 
-      - name: Print result
-        shell: bash
-        run: |
-          OUTDIR="${{ steps.vars.outputs.OUTDIR }}"
-          cat <<EOF
-          {
-            "status": "ok",
-            "repo_tree_url": "https://github.com/${{ github.repository }}/tree/${{ github.ref_name }}/$OUTDIR",
-            "metadata_page_url": "https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/$OUTDIR/metadata.json",
-            "zip_page_url": "https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/$OUTDIR/package.zip"
-          }
+    git add dist
+
+    if git diff --cached --quiet; then
+      echo "No changes to commit."
+      exit 0
+    fi
+
+    git commit -m "Add PyTorch wheels: ${{ steps.vars.outputs.TORCH }} / ${{ steps.vars.outputs.CUDA / cp${{ steps.vars.outputs.PYTAG }}"
+    git push --verbose
+
           EOF
