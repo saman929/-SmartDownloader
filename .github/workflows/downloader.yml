@@ -1,4 +1,4 @@
-name: SmartDownloader - PyTorch Ultra v6.0
+name: SmartDownloader - PyTorch Ultra v6.1 ZIP-Push
 
 on:
   workflow_dispatch:
@@ -34,7 +34,7 @@ jobs:
         with:
           python-version: ${{ github.event.inputs.python_ver }}
 
-      - name: 📥 Download PyTorch Wheels (via pip)
+      - name: 📥 Download PyTorch Wheels
         run: |
           set -e
           mkdir -p downloads
@@ -42,20 +42,35 @@ jobs:
           CUDA="${{ github.event.inputs.cuda_ver }}"
           TORCH="${{ github.event.inputs.torch_ver }}"
 
-          echo "🔥 Downloading torch, torchvision, torchaudio"
-          echo "Python = ${{ github.event.inputs.python_ver }}"
-          echo "CUDA = $CUDA"
+          echo "🔥 Downloading torch ecosystem..."
+          pip download torch=="$TORCH" torchvision torchaudio \
+            --index-url https://download.pytorch.org/whl/$CUDA \
+            -d downloads/
 
-          pip download torch=="$TORCH" torchvision torchaudio --index-url https://download.pytorch.org/whl/$CUDA -d downloads/
-
-          echo "📦 Files downloaded:"
+          echo "📦 Downloaded files:"
           ls -lh downloads
 
-      - name: 🧩 Commit & Push
+      - name: 📦 Create ZIP Archive (Safe Push)
         run: |
+          set -e
+          TS=$(date +%s)
+          ZIP_NAME="pytorch_${{ github.event.inputs.torch_ver }}_${TS}.zip"
+
+          cd downloads
+          zip -r "../$ZIP_NAME" .
+          cd ..
+
+          echo "Created ZIP: $ZIP_NAME"
+          ls -lh "$ZIP_NAME"
+
+          rm -rf downloads  # Remove unzipped files to avoid huge push
+
+      - name: 🧩 Commit & Push ZIP Only
+        run: |
+          set -e
           git config --global user.email "actions@github.com"
           git config --global user.name "github-actions[bot]"
 
-          git add downloads/
-          git commit -m "🔥 PyTorch WHL downloaded via Ultra v6.0" || true
+          git add "*.zip"
+          git commit -m "🔥 PyTorch Ultra v6.1 ZIP package uploaded"
           git push
