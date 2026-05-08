@@ -1,13 +1,14 @@
-name: SmartDownloader - Ultra-Input v5.1
+name: SmartDownloader - Ultra-Input v5.2
 
 on:
   workflow_dispatch:
     inputs:
       urls:
-        description: 'لینک‌های دانلود رو اینجا وارد کن (با کاما جدا کن)'
+        description: 'لینک‌ها را با کاما جدا کن'
         required: true
+        default: 'https://download.pytorch.org/whl/cu121/torch-2.2.2+cu121-cp311-cp311-win_amd64.whl'
 
-        permissions:
+permissions:
   contents: write
 
 jobs:
@@ -15,70 +16,41 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 🧩 Set up job
-        run: echo "::group::[INIT] Setting up workspace"
-      
-      - name: 📂 Checkout repo
+      - name: 🧠 Checkout repository
         uses: actions/checkout@v4
 
-      - name: ⚙️ Install tools (Ultra-Safe)
-        shell: bash
-        run: |
-          sudo apt update -q
-          sudo apt install -y curl aria2 ca-certificates zip unzip git > /dev/null
-
-      - name: 📁 Prepare workspace
-        shell: bash
-        run: mkdir -p downloads logs
-
-      - name: 🌐 Smart Download Engine
-        shell: bash
+      - name: 📥 Smart Download
         run: |
           set -e
-          echo "::group::[ENGINE] Processing Input URLs"
-          
-          # تبدیل ورودی کاربر به آرایه (جدا شده با کاما)
-          IFS=',' read -ra ADDR <<< "${{ github.event.inputs.urls }}"
-          
-          for url in "${ADDR[@]}"; do
-            # حذف فاصله‌های احتمالی اول و آخر لینک
-            url=$(echo $url | xargs)
-            echo "⏳ Downloading: $url"
-            
-            if [[ "$url" == *"pytorch.org"* ]]; then
-              curl -L --retry 5 --retry-delay 5 -o "downloads/$(basename $url)" "$url"
-            else
-              aria2c -x16 -s16 --retry-wait=5 --max-tries=10 -d downloads "$url"
-            fi
+          mkdir -p downloads
+          IFS=',' read -ra URLS <<< "${{ github.event.inputs.urls }}"
+          for URL in "${URLS[@]}"; do
+            URL=$(echo "$URL" | xargs)
+            echo "⬇️ Downloading: $URL"
+            wget --continue --tries=15 --timeout=60 --retry-connrefused \
+                 --waitretry=5 --show-progress "$URL" -P downloads/
           done
-          echo "::endgroup::"
 
-      - name: 🧠 Commit & Push (SecureZIP fallback)
-        shell: bash
+      - name: 🧩 Commit & Push (SecureZIP fallback)
         run: |
           set -e
-          echo "::group::[COMMIT] Saving files to repo"
           git config --global user.email "actions@github.com"
-          git config --global user.name "SmartDownloader"
+          git config --global user.name "github-actions[bot]"
 
-          git add downloads || true
+          git add downloads/
           git commit -m "🚀 New downloads added [$(date +'%Y-%m-%d %H:%M')]" || echo "Nothing to commit"
-          git pull origin main --rebase || echo "No rebase needed"
 
-          if ! git push origin main; then
-            echo "⚠️ Push failed (Size Limit?) → Using SecureZIP Fallback"
-            mkdir -p /tmp/sdzip
-            ZIP_PATH="/tmp/sdzip/archive_$(date +%s).zip"
-            zip -r "$ZIP_PATH" downloads
+          git push || (
+            echo "⚠️ Push failed → ZIP fallback activated"
+
+            TS=$(date +%s)
+            ZIP_PATH="/tmp/archive_${TS}.zip"
+
+            zip -r "$ZIP_PATH" downloads/
             rm -rf downloads/*
-            mv "$ZIP_PATH" downloads/
-            git add downloads
-            git commit -m "🧩 ZIP Fallback applied"
-            git push origin main --force
-          fi
-          echo "::endgroup::"
+            mv "$ZIP_PATH" "downloads/archive_${TS}.zip"
 
-      - name: 🧾 Summary
-        run: |
-          echo "✅ عملیات با موفقیت انجام شد سامان جان"
-          ls -lh downloads
+            git add downloads/
+            git commit -m "🧩 ZIP Fallback applied"
+            git push
+          )
