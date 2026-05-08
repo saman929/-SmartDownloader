@@ -115,10 +115,3 @@ downloads/
 
 # 🤝 مشارکت  
 Pull Request و Issue پذیرفته می‌شود.
-
----
-
-# 📄 لایسنس  
-MIT License
-
----
