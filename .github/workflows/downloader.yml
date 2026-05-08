@@ -6,7 +6,9 @@ on:
       urls:
         description: 'لینک‌های دانلود رو اینجا وارد کن (با کاما جدا کن)'
         required: true
-        default: 'https://download.pytorch.org/whl/cu121/torch-2.2.2+cu121-cp310-cp310-linux_x86_64.whl'
+
+        permissions:
+  contents: write
 
 jobs:
   ultra:
