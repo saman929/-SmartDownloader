@@ -1,11 +1,22 @@
-name: SmartDownloader - Ultra-Input v5.3
+name: SmartDownloader - PyTorch Ultra v6.0
 
 on:
   workflow_dispatch:
     inputs:
-      urls:
-        description: 'لینک‌ها را با کاما جدا کن'
+      python_ver:
+        description: 'Python Version (e.g. 3.10 or 3.11)'
         required: true
+        default: '3.11'
+
+      cuda_ver:
+        description: 'CUDA Version (e.g. cu121 or cu118 or cpu)'
+        required: true
+        default: 'cu121'
+
+      torch_ver:
+        description: 'Torch Version'
+        required: true
+        default: '2.2.2'
 
 permissions:
   contents: write
@@ -15,87 +26,36 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 🧠 Checkout repository
+      - name: 🧠 Checkout
         uses: actions/checkout@v4
 
-      - name: 📥 Smart Download
-        shell: bash
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ github.event.inputs.python_ver }}
+
+      - name: 📥 Download PyTorch Wheels (via pip)
         run: |
           set -e
           mkdir -p downloads
 
-          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+          CUDA="${{ github.event.inputs.cuda_ver }}"
+          TORCH="${{ github.event.inputs.torch_ver }}"
 
-          IFS=',' read -ra URLS <<< "${{ github.event.inputs.urls }}"
+          echo "🔥 Downloading torch, torchvision, torchaudio"
+          echo "Python = ${{ github.event.inputs.python_ver }}"
+          echo "CUDA = $CUDA"
 
-          for URL in "${URLS[@]}"; do
-            URL=$(echo "$URL" | xargs)
-            [ -z "$URL" ] && continue
+          pip download torch=="$TORCH" torchvision torchaudio --index-url https://download.pytorch.org/whl/$CUDA -d downloads/
 
-            FILE_NAME=$(basename "${URL%%\?*}")
-            TARGET="downloads/$FILE_NAME"
+          echo "📦 Files downloaded:"
+          ls -lh downloads
 
-            echo "⬇️ Downloading: $URL"
-
-            if wget \
-              --user-agent="$UA" \
-              --header="Accept: */*" \
-              --continue \
-              --tries=5 \
-              --timeout=60 \
-              --retry-connrefused \
-              --waitretry=3 \
-              --show-progress \
-              "$URL" -O "$TARGET"; then
-              echo "✅ wget success: $FILE_NAME"
-            else
-              echo "⚠️ wget failed, trying curl..."
-
-              if curl -L \
-                -A "$UA" \
-                --retry 5 \
-                --retry-delay 3 \
-                --connect-timeout 30 \
-                -o "$TARGET" \
-                "$URL"; then
-                echo "✅ curl success: $FILE_NAME"
-              else
-                echo "❌ Failed to download: $URL"
-                rm -f "$TARGET"
-              fi
-            fi
-          done
-
-          echo "📦 Download folder contents:"
-          ls -lh downloads || true
-
-      - name: 🧩 Commit & Push (SecureZIP fallback)
-        shell: bash
+      - name: 🧩 Commit & Push
         run: |
-          set -e
-
-          if [ -z "$(find downloads -type f | head -n 1)" ]; then
-            echo "❌ No files downloaded. Exiting."
-            exit 1
-          fi
-
           git config --global user.email "actions@github.com"
           git config --global user.name "github-actions[bot]"
 
           git add downloads/
-          git commit -m "🚀 New downloads added [$(date +'%Y-%m-%d %H:%M')]" || echo "Nothing to commit"
-
-          git push || (
-            echo "⚠️ Push failed → ZIP fallback activated"
-
-            TS=$(date +%s)
-            ZIP_PATH="/tmp/archive_${TS}.zip"
-
-            zip -r "$ZIP_PATH" downloads/
-            find downloads -type f ! -name ".gitkeep" -delete
-            mv "$ZIP_PATH" "downloads/archive_${TS}.zip"
-
-            git add downloads/
-            git commit -m "🧩 ZIP Fallback applied"
-            git push
-          )
+          git commit -m "🔥 PyTorch WHL downloaded via Ultra v6.0" || true
+          git push
