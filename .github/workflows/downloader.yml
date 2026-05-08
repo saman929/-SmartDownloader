@@ -1,141 +1,104 @@
-name: SmartDownloader - Ultra Mode
+name: SmartDownloader - AutoZIP Fallback
 
 on:
   workflow_dispatch:
     inputs:
       urls:
-        description: "Space-separated URLs to download"
+        description: 'لینک‌های دانلود (با فاصله جدا کن)'
         required: true
-        type: string
-
       mode:
-        description: "Download mode (normal or zip)"
-        default: "normal"
-        type: choice
-        options: [normal, zip]
-
-      split_threshold_mb:
-        description: "Split large files > X MB (0 = no split)"
-        default: 100
-        type: number
+        description: 'normal یا zip'
+        required: false
+        default: 'normal'
+      split:
+        description: 'حجم split بر حسب MB (اختیاری)'
+        required: false
+        default: 'none'
 
 jobs:
   ultra:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
 
       - name: Install download tools
         run: |
-          sudo apt-get update
-          sudo apt-get install -y aria2 zip curl jq
+          sudo apt update
+          sudo apt install -y curl aria2 zip
 
       - name: Launch SmartDownloader
-        run: echo "🚀 SmartDownloader Ultra Mode started"
+        run: mkdir -p downloads
 
       - name: Run Ultra logic
         run: |
-          set -e
+          echo "🔗 لینک‌ها:"
+          echo "${{ github.event.inputs.urls }}"
 
-          URLS=(${{ github.event.inputs.urls }})
+          URLS="${{ github.event.inputs.urls }}"
           MODE="${{ github.event.inputs.mode }}"
-          SPLIT_MB="${{ github.event.inputs.split_threshold_mb }}"
-          SPLIT_BYTES=$(( SPLIT_MB * 1024 * 1024 ))
+          SPLIT="${{ github.event.inputs.split }}"
 
-          mkdir -p downloads tmp chunks
+          cd downloads
 
-          use_curl() {
-            [[ "$1" =~ pytorch|huggingface|googleapis|cdn|redirect|\.whl$ ]]
-          }
-
-          ultra_download() {
-            URL="$1"
-            FILE="$2"
-            echo "🔽 Downloading: $URL"
-
-            for ATTEMPT in {1..15}; do
-              echo "🔁 Attempt $ATTEMPT"
-
-              if use_curl "$URL"; then
-                curl -L --fail --retry 5 --retry-delay 2 \
-                     -o "tmp/$FILE" "$URL" && break
-              else
-                aria2c --allow-overwrite=true --continue=true \
-                       --max-connection-per-server=4 --split=4 \
-                       --min-split-size=10M --dir="tmp" --out="$FILE" "$URL" && break
-              fi
-
-              sleep $((ATTEMPT * 3))
-            done
-
-            if [ ! -s "tmp/$FILE" ] || file tmp/$FILE | grep -qi "HTML"; then
-              echo "⚠️ Invalid or HTML file detected → chunk mode"
-              rm -f "tmp/$FILE"
-              rm -f chunks/*
-
-              CHUNK_SIZE=20M
-              for CH in {0..20}; do
-                START=$((CH * 20 * 1024 * 1024))
-                END=$((START + 20 * 1024 * 1024 - 1))
-
-                curl -L --fail --range "$START-$END" "$URL" \
-                     -o "chunks/chunk_$CH" || break
-
-                [ ! -s "chunks/chunk_$CH" ] && break
-              done
-
-              cat chunks/chunk_* > "tmp/$FILE"
+          for LINK in $URLS; do
+            echo "⬇️ Downloading: $LINK"
+            if [[ "$LINK" =~ "pytorch.org" || "$LINK" =~ "huggingface.co" || "$LINK" =~ "googleusercontent" ]]; then
+              echo "Using curl for CDN-protected link"
+              curl -L --retry 10 --retry-delay 10 -O "$LINK"
+            else
+              echo "Using aria2c for standard link"
+              aria2c -x 16 -s 16 "$LINK"
             fi
 
-            [ ! -s "tmp/$FILE" ] && { echo "❌ FAILED: $URL"; exit 1; }
-            echo "✅ OK: $FILE"
-          }
-
-          for URL in "${URLS[@]}"; do
-            FILE=$(basename "$URL")
-            ultra_download "$URL" "$FILE"
+            # Check integrity
+            FILE=$(basename "$LINK")
+            if [ ! -f "$FILE" ] || [ ! -s "$FILE" ]; then
+              echo "⚠️ File may be HTML or empty — switching to chunk mode"
+              curl -L --retry 10 --retry-delay 10 --range 0-10485759 -o "${FILE}.part1" "$LINK"
+              curl -L --retry 10 --retry-delay 10 --range 10485760-20971519 -o "${FILE}.part2" "$LINK"
+              cat "${FILE}.part1" "${FILE}.part2" > "${FILE}"
+              rm -f "${FILE}.part1" "${FILE}.part2"
+            fi
           done
 
-          if [ "$MODE" = "zip" ]; then
-            ZIPNAME="downloads/archive_$(date +%Y%m%d_%H%M%S).zip"
-            zip -j "$ZIPNAME" tmp/*
-          else
-            for F in tmp/*; do
-              SIZE=$(stat -c%s "$F")
-              BASE=$(basename "$F")
+          cd ..
 
-              if [ "$SPLIT_BYTES" -gt 0 ] && [ "$SIZE" -gt "$SPLIT_BYTES" ]; then
-                zip -0 -s "${SPLIT_MB}m" "downloads/${BASE}.zip" -j "$F"
-              else
-                cp "$F" downloads/
-              fi
-            done
+      - name: Commit & push batches (AutoZIP Fallback)
+        if: always()
+        run: |
+          git config --global user.email "actions@github.com"
+          git config --global user.name "GitHub Actions"
+
+          echo "Check total size before commit:"
+          du -sh downloads
+
+          SIZE_MB=$(du -sm downloads | cut -f1)
+          echo "Total MB: $SIZE_MB"
+
+          # Fallback: AutoZIP if size > 2500 MB or commit fails
+          if [ "$SIZE_MB" -gt 2500 ]; then
+            echo "⚡ AutoZIP fallback triggered (size > 2.5GB)"
+            zip -r downloads_auto.zip downloads
+            rm -rf downloads
+            mkdir downloads
+            mv downloads_auto.zip downloads/
           fi
 
-          rm -rf tmp chunks
+          git add downloads || true
+          git commit -m "🚀 Auto commit downloaded files" || echo "Nothing to commit"
+          git pull origin main --rebase || echo "No rebase needed"
 
-      - name: Commit & push batches
-        run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
+          git push origin main || (
+            echo "⚠️ Push failed — trying AutoZIP fallback"
+            zip -r downloads_backup.zip downloads
+            rm -rf downloads
+            mkdir downloads
+            mv downloads_backup.zip downloads/
+            git add downloads
+            git commit -m "🧩 AutoZIP fallback push"
+            git push origin main --force
+          )
 
-          BRANCH="${GITHUB_REF_NAME}"
-          FILES=($(git ls-files --others --modified --exclude-standard downloads/))
-          [ ${#FILES[@]} -eq 0 ] && exit 0
-
-          BATCH=5
-          COUNT=0
-          for ((i=0;i<${#FILES[@]};i+=BATCH)); do
-            COUNT=$((COUNT+1))
-            PART=("${FILES[@]:i:BATCH}")
-            git add "${PART[@]}"
-            git commit -m "SmartDownloader batch $COUNT [skip ci]"
-            git pull --rebase origin "$BRANCH"
-            git push origin HEAD:"$BRANCH"
-          done
-
-          echo "🎉 SmartDownloader finished: $COUNT batch(es) uploaded"
+      - name: Complete job
+        run: echo "✅ SmartDownloader finished successfully"
